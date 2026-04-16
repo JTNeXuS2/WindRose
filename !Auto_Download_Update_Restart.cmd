@@ -15,7 +15,7 @@ set "STEAMCMD_EXE=%STEAMCMD_DIR%\steamcmd.exe"
 
 if exist "%STEAMCMD_EXE%" (
     echo SteamCMD found: %STEAMCMD_EXE%
-    goto UPDATE
+    goto skip_steam
 )
 
 echo SteamCMD not found!
@@ -56,17 +56,7 @@ if exist "%STEAMCMD_EXE%" (
     pause
     exit /b 1
 )
-
-:UPDATE
-echo.
-echo ==========UPDATING SERVER=========
-set "Installdir=%~dp0."
-echo Installing to: !Installdir!
-echo.
-"%STEAMCMD_EXE%" +force_install_dir "!Installdir!" +login anonymous +app_update %APP% validate +quit
-echo.
-echo ==========UPDATE COMPLETED=========
-timeout /t 3
+:skip_steam
 
 :: WINDROUSE ADDITION
 set "ServerDescription=%~dp0R5\ServerDescription.json"
@@ -109,12 +99,8 @@ if not exist "%Server_Start%" (
     echo [OK] Server_Start.cmd created
 )
 
-:start_server
-echo ==========Start Server=========
-call Server_Start.cmd
-timeout /t 60
-
 :: END WINDROSE
+
 
 :recheck
 :: READ VERSION FROM MANIFEST
@@ -130,22 +116,17 @@ for /f "usebackq tokens=* delims=" %%a in ("%MANIFEST_FILE%") do (
 for /f "tokens=2 delims=	" %%a in ("!installedVersion!") do (
 	set installedVersion=%%a
 	set "installedVersion=!installedVersion:"=!"
-	echo Installed: in %MANIFEST_FILE%
-	echo version: !installedVersion!
+	echo Installed: in %MANIFEST_FILE% - !installedVersion!
 )
 :skip_manifest
-
 set "URL=https://api.steamcmd.net/v1/info/%APP%"
 for /f %%x in ('powershell -command "Get-Date -format 'dd.MM.yyyy HH:mm:ss'"') do set datetime=%%x
 set "date_time=%datetime% %TIME%"
 set oldsteamdate=!installedVersion!
-
 echo Versions check %URL%
-
 :: Используем PowerShell для загрузки JSON и извлечения buildid из branches.public
 for /f "usebackq delims=" %%i in (`powershell -Command "& { try { $data = Invoke-RestMethod -Uri '%URL%' -ErrorAction Stop; $buildid = $data.data.'%APP%'.depots.branches.public.buildid; Write-Output $buildid } catch { Write-Error 'Failed' } }" 2^>nul`) do set "BUILD_ID=%%i"
 if defined BUILD_ID (
-    echo Success! Build ID: %BUILD_ID%
 	set newsteamdate=%BUILD_ID%
 ) else (
     echo Failed to retrieve Build ID. Check App ID and internet connection.
@@ -154,16 +135,19 @@ if defined BUILD_ID (
 
 echo OLD:%oldsteamdate%
 echo NEW:%newsteamdate%
-if "%newsteamdate%" == "Internal S" echo "%newsteamdate%" Error get version, check again & timeout /t 60 & goto recheck
+if "%newsteamdate%" == "Internal S" echo "%newsteamdate%" Error get version, check again & goto Offline
 if not "%oldsteamdate%"=="" if not "%newsteamdate%"=="" if not "%newsteamdate%"=="%oldsteamdate%" goto startupdate
 
 :: CHECK OFFLINE
 :Offline
 :: FIND PID Path
+if not exist WindroseServer.exe (
+    echo Not Found WindroseServer.exe
+	goto KILL
+)
 set "ProcessId="
 set "ProcessFound="
 TITLE !WorkingDir!
-
 for /f "delims=" %%i in ('powershell.exe -command "$Processes = Get-Process; $Processes | Where-Object { $_.Path -like '*!WorkingDir%!' } | Select-Object -ExpandProperty Id"') do (
     set "ProcessFound=1"
     set "ProcessId=%%i"
@@ -171,9 +155,13 @@ for /f "delims=" %%i in ('powershell.exe -command "$Processes = Get-Process; $Pr
 if not defined ProcessFound (
     echo Процесс не найден !WorkingDir!
     echo Выполняем перезапуск.
+	echo ==========Start Server=========
+	call Server_Start.cmd
+	timeout /t 10
 	goto MAIN
 ) else (
     echo Найден !WorkingDir! с ID: %ProcessId%
+    goto get_invite
 )
 timeout /t 60
 goto recheck
@@ -193,9 +181,43 @@ for /f "delims=" %%i in ('powershell.exe -command "$Processes = Get-Process; $Pr
 )
 if not defined ProcessFound (
     echo Процесс не найден !WorkingDir!, обновляем
+	goto UPDATE
 ) else (
     echo Найден !WorkingDir! с ID: %ProcessId% KILL
     powershell.exe -command "$Processes = Get-Process; $Processes | Where-Object { $_.Path -like '*!WorkingDir!*' } | ForEach-Object { Stop-Process -Id $_.Id }"
+    goto UPDATE
 )
 timeout /t 5
 goto MAIN
+
+:UPDATE
+echo.
+echo ==========UPDATING SERVER=========
+set "Installdir=%~dp0."
+echo Installing to: !Installdir!
+echo.
+"%STEAMCMD_EXE%" +force_install_dir "!Installdir!" +login anonymous +app_update %APP% validate +quit
+echo.
+echo ==========UPDATE COMPLETED=========
+timeout /t 3
+goto Offline
+
+:get_invite
+cls
+echo.
+echo Version Build:%oldsteamdate%
+set "INVITE_CODE="
+if not exist "%ServerDescription%" (
+    echo Error: File %ServerDescription% not found!
+    goto recheck
+)
+
+for /f "usebackq delims=" %%i in (`powershell -Command "& { $json = Get-Content '%ServerDescription%' -Raw | ConvertFrom-Json; $json.ServerDescription_Persistent.InviteCode }" 2^>nul`) do set "INVITE_CODE=%%i"
+
+if defined INVITE_CODE (
+    ECHO.
+    echo ========== INVITE CODE =========
+    ECHO Code: %INVITE_CODE%
+)
+timeout /t 60
+goto recheck
